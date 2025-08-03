@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { PrivyWrapper } from "@/config/privy";
+import { PrivyCitreaWrapper as PrivyWrapper } from "@/config/privy";
 
 const inter = Inter({ subsets: ["latin"] });
 

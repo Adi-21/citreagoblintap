@@ -50,7 +50,7 @@ export default function WalletSetup() {
       <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4 shadow-xl text-black">
         <h2 className="text-2xl font-bold mb-4 text-center">Setup Your Wallet</h2>
         <p className="text-center mb-6">
-          You need to create or connect a wallet to play Citrea Slingers.
+          You need to create or connect a wallet to play Citrea Goblin Tap game.
         </p>
         
         <div className="space-y-4">
