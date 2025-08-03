@@ -4,9 +4,16 @@ import React, { useState, useEffect } from 'react';
 import { useBlockchain } from '@/hooks/useBlockchain';
 import { BETTING_POOL_ADDRESS, GOBLIN_TAP_ADDRESS } from '@/config/blockchain';
 
+interface PoolStatus {
+  totalPool: string;
+  houseReserve: string;
+  playerFunds: string;
+  contractBalance: string;
+}
+
 export default function PoolStatus() {
   const { isPoolEnabled, getPoolStatus } = useBlockchain();
-  const [poolStatus, setPoolStatus] = useState<any>(null);
+  const [poolStatus, setPoolStatus] = useState<PoolStatus | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [debugInfo, setDebugInfo] = useState<string>('');
 

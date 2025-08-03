@@ -1,7 +1,5 @@
 import Header from '@/components/Header';
 import GoblinTapGame from '@/components/GoblinTapGame';
-import PoolStatus from '@/components/PoolStatus';
-import DebugInfo from '@/components/DebugInfo';
 import WalletSetup from '@/components/WalletSetup';
 import { BettingDebugPanel } from '@/components/BettingDebugPanel';
 

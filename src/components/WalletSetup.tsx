@@ -41,7 +41,7 @@ export default function WalletSetup() {
   }
 
   // Show setup if user is authenticated but has no wallet
-  if (user?.wallet || user?.smartWallet || (user?.delegatedWallets && user.delegatedWallets.length > 0)) {
+  if (user?.wallet || user?.smartWallet) {
     return null;
   }
 
@@ -71,7 +71,7 @@ export default function WalletSetup() {
         </div>
         
         <p className="text-sm text-gray-600 mt-4 text-center">
-          Embedded wallets are created automatically and don't require seed phrases.
+          Embedded wallets are created automatically and don&apos;t require seed phrases.
         </p>
       </div>
     </div>

@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useBlockchain } from '@/hooks/useBlockchain';
-import { usePrivy } from '@privy-io/react-auth';
 import { PAYOUT_MULTIPLIERS } from '@/config/blockchain';
 
 // --- GAME CONFIGURATION ---
@@ -71,10 +70,17 @@ const DirtMound = () => (
 );
 
 // Betting Modal Component  
+interface PoolStatus {
+  totalPool: string;
+  houseReserve: string;
+  playerFunds: string;
+  contractBalance: string;
+}
+
 const BettingModal = ({ isOpen, onClose, onBetPlaced }: { isOpen: boolean; onClose: () => void; onBetPlaced: (betAmount: string, betId?: number) => void; }) => {
   const [betAmount, setBetAmount] = useState('');
   const [balance, setBalance] = useState('0');
-  const [poolStatus, setPoolStatus] = useState<any>(null);
+  const [poolStatus, setPoolStatus] = useState<PoolStatus | null>(null);
   const [previewPayouts, setPreviewPayouts] = useState({ win5: '0', win8: '0', win10: '0' });
   const { placeBet, getBalance, refreshBalance, isLoading, error, authenticated, isPoolEnabled, getPoolStatus, previewPayout } = useBlockchain();
 
@@ -254,7 +260,7 @@ const BettingModal = ({ isOpen, onClose, onBetPlaced }: { isOpen: boolean; onClo
 
 // Results Modal Component
 const ResultsModal = ({ isOpen, onClose, goblinsTapped, betAmount, onPlayAgain }: { isOpen: boolean; onClose: () => void; goblinsTapped: number; betAmount: string; onPlayAgain: () => void; }) => {
-  const { claimWinnings, refreshBalance, isLoading, previewPayout, isPoolEnabled } = useBlockchain();
+  const { claimWinnings, refreshBalance, isLoading, previewPayout } = useBlockchain();
   const [winnings, setWinnings] = useState<number | null>(null);
   const [hasClaimed, setHasClaimed] = useState(false);
   const [actualPayout, setActualPayout] = useState<string>('0');
@@ -304,7 +310,7 @@ const ResultsModal = ({ isOpen, onClose, goblinsTapped, betAmount, onPlayAgain }
       setHasClaimed(false);
       setActualPayout('0');
     }
-  }, [isOpen, goblinsTapped, betAmount, previewPayout, actualPayout, claimWinnings]);
+  }, [isOpen, goblinsTapped, betAmount, previewPayout, actualPayout, claimWinnings, hasClaimed, refreshBalance]);
 
   if (!isOpen) return null;
 
@@ -363,8 +369,6 @@ const ResultsModal = ({ isOpen, onClose, goblinsTapped, betAmount, onPlayAgain }
 
 // --- MAIN GAME COMPONENT ---
 export default function GoblinTapGame() {
-  const { authenticated } = usePrivy();
-  const { getActiveBet, hasActiveBet } = useBlockchain();
   
   // --- STATE MANAGEMENT ---
   const [holes, setHoles] = useState(Array(GRID_SIZE).fill({ isUp: false, isHit: false }));
@@ -398,11 +402,18 @@ export default function GoblinTapGame() {
     }, 300);
   };
 
+  const endGame = useCallback((result: 'win' | 'loss') => {
+    setIsGameActive(false);
+    setGameResult(result);
+    setLastGameResult({ goblins: score, bet: '0.001', betId: null }); // Default values - will be updated when bet is placed
+    setShowResultsModal(true);
+  }, [score]);
+
   useEffect(() => {
     if (score >= TARGET_SCORE && isGameActive) {
       endGame('win');
     }
-  }, [score, isGameActive]);
+  }, [score, isGameActive, endGame]);
 
   useInterval(() => {
     setTimeLeft(prev => prev - 1);
@@ -412,7 +423,7 @@ export default function GoblinTapGame() {
     if (timeLeft <= 0 && isGameActive) {
       endGame('loss');
     }
-  }, [timeLeft, isGameActive]);
+  }, [timeLeft, isGameActive, endGame]);
 
   useInterval(() => {
     const availableHoles = holes.map((h, i) => !h.isUp ? i : -1).filter(i => i !== -1);
@@ -445,13 +456,6 @@ export default function GoblinTapGame() {
     setGameResult(null);
     setIsGameActive(true);
   };
-
-  const endGame = useCallback((result: 'win' | 'loss') => {
-    setIsGameActive(false);
-    setGameResult(result);
-    setLastGameResult({ goblins: score, bet: '0.001', betId: null }); // Default values - will be updated when bet is placed
-    setShowResultsModal(true);
-  }, [score]);
 
   const handleBetPlaced = (betAmount: string, betId?: number) => {
     setLastGameResult(prev => ({ ...prev, bet: betAmount, betId: betId || null }));
@@ -517,7 +521,7 @@ export default function GoblinTapGame() {
                 {gameResult === 'loss' && (
                   <>
                     <div className="text-8xl mb-4">😅</div>
-                    <h2 className="text-5xl text-red-600 mb-4 drop-shadow-lg font-bold">TIME'S UP!</h2>
+                    <h2 className="text-5xl text-red-600 mb-4 drop-shadow-lg font-bold">TIME&apos;S UP!</h2>
                     <p className="text-xl mb-6 text-black font-semibold">You only tapped {score} goblins.</p>
                   </>
                 )}

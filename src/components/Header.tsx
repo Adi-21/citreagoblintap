@@ -1,26 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { usePrivy } from '@privy-io/react-auth';
-import { useBlockchain } from '@/hooks/useBlockchain';
-import { formatEther } from 'viem';
 
 export default function Header() {
-  const { user, authenticated, logout } = usePrivy();
-  const { getBalance, refreshBalance } = useBlockchain();
-  const [balance, setBalance] = useState<string>('0');
-  const [isLoadingBalance, setIsLoadingBalance] = useState(false);
-
-  // Fetch balance when user is authenticated
-  useEffect(() => {
-    if (authenticated && user) {
-      setIsLoadingBalance(true);
-      getBalance()
-        .then(setBalance)
-        .catch(console.error)
-        .finally(() => setIsLoadingBalance(false));
-    }
-  }, [authenticated, user, getBalance]);
+  const { authenticated, logout } = usePrivy();
 
   if (!authenticated) {
     return (

@@ -1,20 +1,38 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useBlockchain } from '@/hooks/useBlockchain';
-import { formatEther, parseEther } from 'viem';
+import { formatEther } from 'viem';
 import { publicClient, GOBLIN_TAP_ADDRESS, BETTING_POOL_ADDRESS } from '@/config/blockchain';
 
 interface BettingDebugPanelProps {
     className?: string;
 }
 
+interface Bet {
+    id: bigint;
+    player: `0x${string}`;
+    amount: bigint;
+    timestamp: bigint;
+    isActive: boolean;
+}
+
+interface PoolStatus {
+    totalPool: string;
+    houseReserve: string;
+    playerFunds: string;
+    contractBalance: string;
+}
+
+interface ContractBalances {
+    game: string;
+    pool: string;
+}
+
 export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
     const {
         placeBet,
         claimWinnings,
-        getActiveBet,
-        hasActiveBet,
         getBalance,
         getPoolStatus,
         previewPayout,
@@ -25,18 +43,18 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
         isPoolEnabled
     } = useBlockchain();
 
-    const [activeBets, setActiveBets] = useState<any[]>([]);
+    const [activeBets, setActiveBets] = useState<Bet[]>([]);
     const [activeBetCount, setActiveBetCount] = useState<number>(0);
-    const [poolStatus, setPoolStatus] = useState<any>(null);
-    const [contractBalances, setContractBalances] = useState<any>(null);
+    const [poolStatus, setPoolStatus] = useState<PoolStatus | null>(null);
+    const [contractBalances, setContractBalances] = useState<ContractBalances | null>(null);
     const [walletBalance, setWalletBalance] = useState<string>('0');
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [testGoblins, setTestGoblins] = useState<number>(10);
-    const [selectedBetId, setSelectedBetId] = useState<number | null>(null);
+    const [selectedBetId, setSelectedBetId] = useState<bigint | null>(null);
     const [previewedPayouts, setPreviewedPayouts] = useState<{ [key: string]: string }>({});
 
     // Refresh all data
-    const refreshData = async () => {
+    const refreshData = useCallback(async () => {
         if (!authenticated || !user) return;
 
         setIsRefreshing(true);
@@ -59,7 +77,7 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
                 functionName: 'getActiveBets',
                 args: [wallet.address as `0x${string}`],
             });
-            setActiveBets(betsResult as any[]);
+            setActiveBets(betsResult as Bet[]);
 
             // Get active bet count
             const betCount = await publicClient.readContract({
@@ -80,7 +98,7 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
 
             // Preview payouts for all active bets
             const payouts: { [key: string]: string } = {};
-            for (const bet of (betsResult as any[])) {
+            for (const bet of (betsResult as Bet[])) {
                 const payout = await previewPayout(formatEther(bet.amount), testGoblins);
                 payouts[bet.id.toString()] = payout;
             }
@@ -115,27 +133,16 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
         } finally {
             setIsRefreshing(false);
         }
-    };
+    }, [authenticated, user, testGoblins, previewPayout, getBalance, getPoolStatus, isPoolEnabled]);
 
     // Auto-refresh on mount and when authentication changes
     useEffect(() => {
         refreshData();
-    }, [authenticated, user]);
+    }, [authenticated, user, refreshData]);
 
-    // Handle claiming winnings (legacy - claims oldest bet)
-    const handleClaimWinnings = async () => {
-        try {
-            const success = await claimWinnings(testGoblins);
-            if (success) {
-                await refreshData(); // Refresh after claiming
-            }
-        } catch (err) {
-            console.error('Error claiming winnings:', err);
-        }
-    };
 
     // Handle claiming specific bet by ID (V3 feature)
-    const handleClaimSpecificBet = async (betId: number) => {
+    const handleClaimSpecificBet = async () => {
         try {
             // Use the claimWinnings function from useBlockchain (it should support bet ID in V3)
             // For now, use the legacy function which claims the oldest bet
@@ -267,7 +274,7 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
                         </div>
 
                         {/* Individual Bets */}
-                        {activeBets.map((bet: any, index: number) => (
+                        {activeBets.map((bet: Bet) => (
                             <div key={bet.id} className="bg-yellow-900/30 border border-yellow-600 rounded p-3">
                                 <div className="flex items-center justify-between mb-2">
                                     <p className="text-yellow-300 font-medium">🎲 Bet #{bet.id}</p>
@@ -281,7 +288,7 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
 
                                 <div className="space-y-1 text-sm">
                                     <p className="text-gray-300">Amount: <span className="text-white">{formatEther(bet.amount)} cBTC</span></p>
-                                    <p className="text-gray-300">Expected Payout: <span className="text-green-400">{previewedPayouts[bet.id] || '0'} cBTC</span></p>
+                                    <p className="text-gray-300">Expected Payout: <span className="text-green-400">{previewedPayouts[bet.id.toString()] || '0'} cBTC</span></p>
                                     {testGoblins < 5 && <span className="text-red-400 text-xs">(Would be loss)</span>}
 
                                     {selectedBetId === bet.id && (
@@ -294,7 +301,7 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
 
                                 <div className="mt-3 flex gap-2">
                                     <button
-                                        onClick={() => handleClaimSpecificBet(bet.id)}
+                                        onClick={() => handleClaimSpecificBet()}
                                         disabled={isLoading}
                                         className="flex-1 px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50"
                                     >
