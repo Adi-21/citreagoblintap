@@ -14,7 +14,7 @@ const GRID_SIZE = 9; // 3x3 grid
 
 // --- HELPER HOOK for managing intervals ---
 const useInterval = (callback: () => void, delay: number | null) => {
-  const savedCallback = useRef<() => void>();
+  const savedCallback = useRef<() => void>(() => {});
 
   useEffect(() => {
     savedCallback.current = callback;
@@ -70,9 +70,9 @@ const DirtMound = () => (
     </div>
 );
 
-// Betting Modal Component
-const BettingModal = ({ isOpen, onClose, onBetPlaced }: { isOpen: boolean; onClose: () => void; onBetPlaced: (betAmount: string) => void; }) => {
-  const [betAmount, setBetAmount] = useState('0.001');
+// Betting Modal Component  
+const BettingModal = ({ isOpen, onClose, onBetPlaced }: { isOpen: boolean; onClose: () => void; onBetPlaced: (betAmount: string, betId?: number) => void; }) => {
+  const [betAmount, setBetAmount] = useState('');
   const [balance, setBalance] = useState('0');
   const [poolStatus, setPoolStatus] = useState<any>(null);
   const [previewPayouts, setPreviewPayouts] = useState({ win5: '0', win8: '0', win10: '0' });
@@ -138,13 +138,55 @@ const BettingModal = ({ isOpen, onClose, onBetPlaced }: { isOpen: boolean; onClo
             <label className="block text-sm font-medium text-gray-700 mb-2">Bet Amount (cBTC)</label>
             <input 
               type="number" 
-              step="0.001"
-              min="0.001"
+              step="0.0001"
+              min="0.0001"
               value={betAmount} 
               onChange={(e) => setBetAmount(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-center text-lg"
-              placeholder="0.001"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-center text-lg text-black"
+              placeholder="Enter amount (e.g., 0.001)"
             />
+            
+            {/* Quick Amount Buttons */}
+            <div className="mt-3">
+              <p className="text-xs text-gray-500 mb-2">Quick amounts:</p>
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setBetAmount('0.0001')}
+                  className="px-3 py-1 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200"
+                >
+                  0.0001
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBetAmount('0.0005')}
+                  className="px-3 py-1 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200"
+                >
+                  0.0005
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBetAmount('0.001')}
+                  className="px-3 py-1 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200"
+                >
+                  0.001
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBetAmount('0.002')}
+                  className="px-3 py-1 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200"
+                >
+                  0.002
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBetAmount('0.005')}
+                  className="px-3 py-1 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200"
+                >
+                  0.005
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* Payout Info */}
@@ -179,6 +221,13 @@ const BettingModal = ({ isOpen, onClose, onBetPlaced }: { isOpen: boolean; onClo
             </div>
           )}
 
+          {/* Validation Messages */}
+          {betAmount && parseFloat(betAmount) < 0.0001 && (
+            <div className="mb-4 p-3 bg-yellow-100 text-yellow-700 rounded border border-yellow-200">
+              ⚠️ Minimum bet amount is 0.0001 cBTC
+            </div>
+          )}
+          
           {error && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded border border-red-200">{error}</div>}
           
           <div className="flex space-x-4">
@@ -191,7 +240,7 @@ const BettingModal = ({ isOpen, onClose, onBetPlaced }: { isOpen: boolean; onClo
             </button>
             <button 
               onClick={handlePlaceBet} 
-              disabled={isLoading || !betAmount || parseFloat(betAmount) <= 0} 
+              disabled={isLoading || !betAmount || parseFloat(betAmount || '0') <= 0} 
               className="flex-1 bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors font-semibold"
             >
               {isLoading ? '⏳ Placing Bet...' : '🎮 Place Bet & Play'}
@@ -315,7 +364,7 @@ const ResultsModal = ({ isOpen, onClose, goblinsTapped, betAmount, onPlayAgain }
 // --- MAIN GAME COMPONENT ---
 export default function GoblinTapGame() {
   const { authenticated } = usePrivy();
-  const { getActiveBet } = useBlockchain();
+  const { getActiveBet, hasActiveBet } = useBlockchain();
   
   // --- STATE MANAGEMENT ---
   const [holes, setHoles] = useState(Array(GRID_SIZE).fill({ isUp: false, isHit: false }));
@@ -325,7 +374,7 @@ export default function GoblinTapGame() {
   const [gameResult, setGameResult] = useState<'win' | 'loss' | null>(null);
   const [showBettingModal, setShowBettingModal] = useState(false);
   const [showResultsModal, setShowResultsModal] = useState(false);
-  const [lastGameResult, setLastGameResult] = useState({ goblins: 0, bet: '0'});
+  const [lastGameResult, setLastGameResult] = useState({ goblins: 0, bet: '0', betId: null as number | null });
 
   // --- GAME LOGIC ---
 
@@ -400,11 +449,12 @@ export default function GoblinTapGame() {
   const endGame = useCallback((result: 'win' | 'loss') => {
     setIsGameActive(false);
     setGameResult(result);
-    setLastGameResult({ goblins: score, bet: '0.001' }); // Default bet amount
+    setLastGameResult({ goblins: score, bet: '0.001', betId: null }); // Default values - will be updated when bet is placed
     setShowResultsModal(true);
   }, [score]);
 
-  const handleBetPlaced = (betAmount: string) => {
+  const handleBetPlaced = (betAmount: string, betId?: number) => {
+    setLastGameResult(prev => ({ ...prev, bet: betAmount, betId: betId || null }));
     setShowBettingModal(false);
     startGame();
   };

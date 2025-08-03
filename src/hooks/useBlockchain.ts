@@ -1,18 +1,17 @@
 import { useState, useCallback } from 'react';
 import { usePrivy, useSendTransaction } from '@privy-io/react-auth';
-import { parseEther, formatEther } from 'viem';
+import { parseEther, formatEther, decodeEventLog } from 'viem';
 import { 
   GOBLIN_TAP_ADDRESS, 
   BETTING_POOL_ADDRESS, 
   GOBLIN_TAP_ABI, 
-  BETTING_POOL_ABI,
-  CONTRACT_ADDRESS, 
-  CONTRACT_ABI, 
+  BETTING_POOL_ABI, 
   publicClient,
   PAYOUT_MULTIPLIERS 
 } from '@/config/blockchain';
 
-export interface Bet {
+export interface BetV3 {
+  id: bigint;  // V3 feature - bet ID
   player: string;
   amount: bigint;
   timestamp: bigint;
@@ -35,28 +34,28 @@ export function useBlockchain() {
   // Check if pool system is enabled (pool address is set)
   const isPoolEnabled = BETTING_POOL_ADDRESS !== '0x0000000000000000000000000000000000000000';
 
-  const placeBet = useCallback(async (amount: string) => {
+  // V3 Enhanced placeBet - returns bet ID
+  const placeBet = useCallback(async (amount: string): Promise<{ success: boolean; betId?: number }> => {
     if (!authenticated || !user) {
       setError('Please connect your wallet first');
-      return false;
+      return { success: false };
     }
 
     setIsLoading(true);
     setError(null);
 
     try {
-      let wallet = user.wallet;
+      const wallet = user.wallet;
       if (!wallet) {
         setError('No wallet available. Please ensure you have connected a wallet.');
         setIsLoading(false);
-        return false;
+        return { success: false };
       }
 
       const amountWei = parseEther(amount);
-      console.log('Placing bet:', amount, 'cBTC for wallet:', wallet.address);
-      console.log('Pool system enabled:', isPoolEnabled);
+      console.log('V3 Placing bet:', amount, 'cBTC for wallet:', wallet.address);
 
-      // Check if user has sufficient balance for bet + fees
+      // Check balance
       const currentBalance = await publicClient.getBalance({
         address: wallet.address as `0x${string}`,
       });
@@ -68,9 +67,9 @@ export function useBlockchain() {
         throw new Error(`Insufficient balance. You need at least ${formatEther(totalNeeded)} cBTC (${amount} for bet + ~0.002 for fees), but you only have ${formatEther(currentBalance)} cBTC.`);
       }
 
-      // Use the appropriate contract address (GoblinTapV2 if pool is enabled, legacy otherwise)
-      const contractAddress = isPoolEnabled ? GOBLIN_TAP_ADDRESS : CONTRACT_ADDRESS;
-      const contractABI = isPoolEnabled ? GOBLIN_TAP_ABI : CONTRACT_ABI;
+      // Use V3 contract
+      const contractAddress = GOBLIN_TAP_ADDRESS;
+      const contractABI = GOBLIN_TAP_ABI;
 
       // Encode the placeBet function call
       const { encodeFunctionData } = await import('viem');
@@ -80,7 +79,7 @@ export function useBlockchain() {
         args: [],
       });
 
-      // Estimate gas for the transaction
+      // Estimate gas
       let gasEstimate;
       try {
         gasEstimate = await publicClient.estimateGas({
@@ -89,50 +88,186 @@ export function useBlockchain() {
           data: data,
           value: amountWei,
         });
-        console.log('Estimated gas for bet:', gasEstimate.toString());
+        console.log('Estimated gas for V3 bet:', gasEstimate.toString());
       } catch (gasError) {
-        console.warn('Gas estimation failed for bet:', gasError);
-        // Higher fallback gas limit for pool operations
-        gasEstimate = isPoolEnabled ? BigInt(200000) : BigInt(100000);
-        console.log('Using fallback gas limit for bet:', gasEstimate.toString());
+        console.warn('Gas estimation failed for V3 bet:', gasError);
+        gasEstimate = BigInt(200000); // V3 fallback
+        console.log('Using fallback gas limit for V3 bet:', gasEstimate.toString());
       }
 
       const result = await sendTransaction({
         to: contractAddress as `0x${string}`,
         value: amountWei,
-        data: data, // Properly encoded placeBet function call
-        gasLimit: gasEstimate, // Add estimated gas limit
+        data: data,
+        gasLimit: gasEstimate,
       }, {
         uiOptions: {
-          showWalletUIs: true, // Show Privy's transaction UI
+          showWalletUIs: true,
         },
       });
 
-      console.log('Bet transaction sent:', result.hash);
+      console.log('V3 Bet transaction sent:', result.hash);
 
       // Wait for transaction confirmation
       const receipt = await publicClient.waitForTransactionReceipt({ hash: result.hash });
-      console.log('Bet transaction confirmed:', receipt);
+      console.log('V3 Bet transaction confirmed:', receipt);
       
-      // Log money flow for debugging
-      if (isPoolEnabled) {
-        console.log('💰 Money flow: User → Game Contract → Pool Contract');
-        console.log('   Game Contract should forward', amount, 'cBTC to pool');
-        console.log('   Pool should split: 95% player funds, 5% house reserve');
-      } else {
-        console.log('💰 Money flow: User → Legacy Contract (direct)');
+             // Extract bet ID from transaction logs/events
+       // In V3, placeBet returns the bet ID, but we need to parse it from the receipt
+       let betId: number | undefined;
+       
+       // Parse the BetPlaced event to get the bet ID
+       try {
+         // Look for BetPlaced event in transaction logs
+         for (const log of receipt.logs) {
+           try {
+             const decoded = decodeEventLog({
+               abi: contractABI,
+               data: log.data,
+               topics: log.topics,
+             });
+             if (decoded.eventName === 'BetPlaced' && decoded.args && Array.isArray(decoded.args)) {
+               // V3 BetPlaced event should have betId as the second parameter (after player)
+               betId = Number(decoded.args[1]);
+               console.log('V3 Bet ID extracted:', betId);
+               break;
+             }
+           } catch {
+             // Skip logs that can't be decoded
+             continue;
+           }
+         }
+       } catch (error) {
+         console.warn('Could not extract bet ID from transaction:', error);
+       }
+
+      return { success: true, betId };
+      
+    } catch (err) {
+      console.error('Error placing V3 bet:', err);
+      setError(err instanceof Error ? err.message : 'Failed to place bet');
+      return { success: false };
+    } finally {
+      setIsLoading(false);
+    }
+  }, [authenticated, user, sendTransaction]);
+
+  // V3 Get all active bets for a player
+  const getActiveBets = useCallback(async (): Promise<BetV3[]> => {
+    if (!authenticated || !user?.wallet) return [];
+
+    try {
+      const wallet = user.wallet;
+      const bets = await publicClient.readContract({
+        address: GOBLIN_TAP_ADDRESS as `0x${string}`,
+        abi: GOBLIN_TAP_ABI,
+        functionName: 'getActiveBets',
+        args: [wallet.address as `0x${string}`],
+      });
+      
+      return bets as BetV3[];
+    } catch (err) {
+      console.error('Error getting active bets:', err);
+      return [];
+    }
+  }, [authenticated, user]);
+
+  // V3 Get active bet count
+  const getActiveBetCount = useCallback(async (): Promise<number> => {
+    if (!authenticated || !user?.wallet) return 0;
+
+    try {
+      const wallet = user.wallet;
+      const count = await publicClient.readContract({
+        address: GOBLIN_TAP_ADDRESS as `0x${string}`,
+        abi: GOBLIN_TAP_ABI,
+        functionName: 'getActiveBetCount',
+        args: [wallet.address as `0x${string}`],
+      });
+      
+      return Number(count);
+    } catch (err) {
+      console.error('Error getting active bet count:', err);
+      return 0;
+    }
+  }, [authenticated, user]);
+
+  // V3 Claim specific bet by ID
+  const claimWinningsById = useCallback(async (betId: number, goblinsTapped: number) => {
+    if (!authenticated || !user) {
+      setError('Please connect your wallet first');
+      return false;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const wallet = user.wallet;
+      if (!wallet) {
+        setError('No wallet available. Please ensure you have connected a wallet.');
+        setIsLoading(false);
+        return false;
       }
+
+      console.log('V3 Claiming winnings for bet ID:', betId, 'with', goblinsTapped, 'goblins');
+      
+      if (goblinsTapped < 0 || goblinsTapped > 255) {
+        throw new Error(`Invalid goblin count: ${goblinsTapped}. Must be between 0 and 255.`);
+      }
+
+      // Encode the V3 claimWinnings function call with bet ID
+      const { encodeFunctionData } = await import('viem');
+      const data = encodeFunctionData({
+        abi: GOBLIN_TAP_ABI,
+        functionName: 'claimWinnings',
+        args: [betId, goblinsTapped],
+      });
+
+      // Estimate gas
+      let gasEstimate;
+      try {
+        gasEstimate = await publicClient.estimateGas({
+          account: wallet.address as `0x${string}`,
+          to: GOBLIN_TAP_ADDRESS as `0x${string}`,
+          data: data,
+          value: BigInt(0),
+        });
+        console.log('Estimated gas for V3 claim:', gasEstimate.toString());
+      } catch (gasError) {
+        console.warn('Gas estimation failed for V3 claim:', gasError);
+        gasEstimate = BigInt(300000); // V3 fallback for claims
+        console.log('Using fallback gas limit for V3 claim:', gasEstimate.toString());
+      }
+
+      const result = await sendTransaction({
+        to: GOBLIN_TAP_ADDRESS as `0x${string}`,
+        data: data,
+        value: BigInt(0),
+        gasLimit: gasEstimate,
+      }, {
+        uiOptions: {
+          showWalletUIs: true,
+        },
+      });
+
+      console.log('V3 Claim winnings transaction sent:', result.hash);
+
+      // Wait for transaction confirmation
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: result.hash });
+      console.log('V3 Claim winnings transaction confirmed:', receipt);
 
       return true;
     } catch (err) {
-      console.error('Error placing bet:', err);
-      setError(err instanceof Error ? err.message : 'Failed to place bet');
+      console.error('Error claiming V3 winnings:', err);
+      setError(err instanceof Error ? err.message : 'Failed to claim winnings');
       return false;
     } finally {
       setIsLoading(false);
     }
-  }, [authenticated, user, sendTransaction, isPoolEnabled]);
+  }, [authenticated, user, sendTransaction]);
 
+  // Legacy claimWinnings (claims oldest bet) for backward compatibility
   const claimWinnings = useCallback(async (goblinsTapped: number) => {
     if (!authenticated || !user) {
       setError('Please connect your wallet first');
@@ -143,173 +278,76 @@ export function useBlockchain() {
     setError(null);
 
     try {
-      let wallet = user.wallet;
+      const wallet = user.wallet;
       if (!wallet) {
         setError('No wallet available. Please ensure you have connected a wallet.');
         setIsLoading(false);
         return false;
       }
 
-      console.log('Claiming winnings for', goblinsTapped, 'goblins...');
-      console.log('Pool system enabled:', isPoolEnabled);
+      console.log('V3 Claiming oldest bet with', goblinsTapped, 'goblins...');
       
-      // Validate goblin count (must be 0-255 for uint8)
       if (goblinsTapped < 0 || goblinsTapped > 255) {
         throw new Error(`Invalid goblin count: ${goblinsTapped}. Must be between 0 and 255.`);
       }
 
-      // Use the appropriate contract and ABI
-      const contractAddress = isPoolEnabled ? GOBLIN_TAP_ADDRESS : CONTRACT_ADDRESS;
-      const contractABI = isPoolEnabled ? GOBLIN_TAP_ABI : CONTRACT_ABI;
-
-      // Encode the function call for claimWinnings
+      // Encode the legacy claimWinnings function call (claims oldest bet)
       const { encodeFunctionData } = await import('viem');
       const data = encodeFunctionData({
-        abi: contractABI,
+        abi: GOBLIN_TAP_ABI,
         functionName: 'claimWinnings',
         args: [goblinsTapped],
       });
-      
-      console.log('Transaction data:', data);
-      console.log('Contract address:', contractAddress);
 
-      // Check if user has an active bet before claiming
-      try {
-        const activeBet = await publicClient.readContract({
-          address: contractAddress as `0x${string}`,
-          abi: contractABI,
-          functionName: 'getActiveBet',
-          args: [wallet.address as `0x${string}`],
-        });
-        console.log('Active bet found:', activeBet);
-      } catch (err) {
-        console.warn('Could not verify active bet:', err);
-        // Continue anyway, let the contract handle the validation
-      }
-
-      // Estimate gas for the transaction
+      // Estimate gas
       let gasEstimate;
       try {
         gasEstimate = await publicClient.estimateGas({
           account: wallet.address as `0x${string}`,
-          to: contractAddress as `0x${string}`,
+          to: GOBLIN_TAP_ADDRESS as `0x${string}`,
           data: data,
           value: BigInt(0),
         });
-        console.log('Estimated gas:', gasEstimate.toString());
+        console.log('Estimated gas for V3 legacy claim:', gasEstimate.toString());
       } catch (gasError) {
-        console.warn('Gas estimation failed:', gasError);
-        // Higher fallback gas limit for pool operations (claimWinnings can be complex)
-        gasEstimate = isPoolEnabled ? BigInt(300000) : BigInt(150000);
-        console.log('Using fallback gas limit:', gasEstimate.toString());
-      }
-
-      // Check if user has sufficient balance for transaction fees
-      const currentBalance = await publicClient.getBalance({
-        address: wallet.address as `0x${string}`,
-      });
-      
-      const estimatedFees = BigInt('5000000000000000'); // estimated 0.005 cBTC for fees (increased for contract calls)
-      
-      if (currentBalance < estimatedFees) {
-        throw new Error(`Insufficient balance for transaction fees. You need at least ${formatEther(estimatedFees)} cBTC for fees, but you only have ${formatEther(currentBalance)} cBTC.`);
+        console.warn('Gas estimation failed for V3 legacy claim:', gasError);
+        gasEstimate = BigInt(300000);
+        console.log('Using fallback gas limit for V3 legacy claim:', gasEstimate.toString());
       }
 
       const result = await sendTransaction({
-        to: contractAddress as `0x${string}`,
+        to: GOBLIN_TAP_ADDRESS as `0x${string}`,
         data: data,
-        value: BigInt(0), // No value for claimWinnings call
-        gasLimit: gasEstimate, // Add the estimated gas limit
+        value: BigInt(0),
+        gasLimit: gasEstimate,
       }, {
         uiOptions: {
-          showWalletUIs: true, // Show Privy's transaction UI
+          showWalletUIs: true,
         },
       });
 
-      console.log('Claim winnings transaction sent:', result.hash);
+      console.log('V3 Legacy claim winnings transaction sent:', result.hash);
 
       // Wait for transaction confirmation
       const receipt = await publicClient.waitForTransactionReceipt({ hash: result.hash });
-      console.log('Claim winnings transaction confirmed:', receipt);
-      
-      // Log money flow for debugging
-      if (isPoolEnabled) {
-        console.log('💰 Money flow: Pool Contract → User Wallet');
-        console.log('   Pool should send payout directly to user');
-        console.log('   User wallet balance should increase');
-        console.log('   Pool balance should decrease');
-      } else {
-        console.log('💰 Money flow: Legacy Contract → User Wallet');
-      }
+      console.log('V3 Legacy claim winnings transaction confirmed:', receipt);
 
       return true;
     } catch (err) {
-      console.error('Error claiming winnings:', err);
+      console.error('Error claiming V3 legacy winnings:', err);
       setError(err instanceof Error ? err.message : 'Failed to claim winnings');
       return false;
     } finally {
       setIsLoading(false);
     }
-  }, [authenticated, user, sendTransaction, isPoolEnabled]);
+  }, [authenticated, user, sendTransaction]);
 
-  const getActiveBet = useCallback(async (): Promise<Bet | null> => {
-    if (!authenticated || !user) return null;
-
-    try {
-      const wallet = user.wallet;
-      if (!wallet) return null;
-      
-      const contractAddress = isPoolEnabled ? GOBLIN_TAP_ADDRESS : CONTRACT_ADDRESS;
-      const contractABI = isPoolEnabled ? GOBLIN_TAP_ABI : CONTRACT_ABI;
-      
-      const bet = await publicClient.readContract({
-        address: contractAddress as `0x${string}`,
-        abi: contractABI,
-        functionName: 'getActiveBet',
-        args: [wallet.address as `0x${string}`],
-      });
-
-      return bet as Bet;
-    } catch (err) {
-      console.error('Error getting active bet:', err);
-      return null;
-    }
-  }, [authenticated, user, isPoolEnabled]);
-
-  const hasActiveBet = useCallback(async (): Promise<boolean> => {
-    if (!authenticated || !user) return false;
-
-    try {
-      const wallet = user.wallet;
-      if (!wallet) return false;
-      
-      const contractAddress = isPoolEnabled ? GOBLIN_TAP_ADDRESS : CONTRACT_ADDRESS;
-      const contractABI = isPoolEnabled ? GOBLIN_TAP_ABI : CONTRACT_ABI;
-      
-      const hasBet = await publicClient.readContract({
-        address: contractAddress as `0x${string}`,
-        abi: contractABI,
-        functionName: 'hasActiveBet',
-        args: [wallet.address as `0x${string}`],
-      });
-
-      return hasBet as boolean;
-    } catch (err) {
-      console.error('Error checking active bet:', err);
-      return false;
-    }
-  }, [authenticated, user, isPoolEnabled]);
-
+  // Get wallet balance
   const getBalance = useCallback(async (): Promise<string> => {
-    if (!authenticated || !user) return '0';
+    if (!authenticated || !user?.wallet) return '0';
 
     try {
-      let wallet = user.wallet;
-      if (!wallet) {
-        console.log('No wallet available, user needs to create one');
-        return '0';
-      }
-
+      const wallet = user.wallet;
       console.log('Getting balance for wallet:', wallet.address);
       const balance = await publicClient.getBalance({
         address: wallet.address as `0x${string}`,
@@ -326,7 +364,7 @@ export function useBlockchain() {
     return await getBalance();
   }, [getBalance]);
 
-  // New pool-specific functions
+  // Pool status
   const getPoolStatus = useCallback(async (): Promise<PoolStatus | null> => {
     if (!isPoolEnabled) return null;
 
@@ -352,12 +390,13 @@ export function useBlockchain() {
     }
   }, [isPoolEnabled]);
 
+  // Preview payout
   const previewPayout = useCallback(async (betAmount: string, goblinsTapped: number): Promise<string> => {
     try {
       const betAmountWei = parseEther(betAmount);
       
       if (isPoolEnabled) {
-        // Use pool contract for accurate payout calculation
+        // Use V3 pool contract for accurate payout calculation
         const payout = await publicClient.readContract({
           address: GOBLIN_TAP_ADDRESS as `0x${string}`,
           abi: GOBLIN_TAP_ABI,
@@ -382,43 +421,33 @@ export function useBlockchain() {
     }
   }, [isPoolEnabled]);
 
-  const canClaimPayout = useCallback(async (goblinsTapped: number): Promise<boolean> => {
-    if (!authenticated || !user) return false;
+  // Legacy compatibility functions
+  const getActiveBet = useCallback(async () => {
+    const bets = await getActiveBets();
+    return bets.length > 0 ? bets[0] : null;
+  }, [getActiveBets]);
 
-    try {
-      const wallet = user.wallet;
-      if (!wallet) return false;
-      
-      if (isPoolEnabled) {
-        // Use pool system validation
-        const canClaim = await publicClient.readContract({
-          address: GOBLIN_TAP_ADDRESS as `0x${string}`,
-          abi: GOBLIN_TAP_ABI,
-          functionName: 'canClaimPayout',
-          args: [wallet.address as `0x${string}`, goblinsTapped],
-        });
-        return canClaim as boolean;
-      } else {
-        // For legacy system, check if user has active bet
-        return await hasActiveBet();
-      }
-    } catch (err) {
-      console.error('Error checking if payout can be claimed:', err);
-      return false;
-    }
-  }, [authenticated, user, isPoolEnabled, hasActiveBet]);
+  const hasActiveBet = useCallback(async (): Promise<boolean> => {
+    const count = await getActiveBetCount();
+    return count > 0;
+  }, [getActiveBetCount]);
 
   return {
+    // V3 Enhanced functions
     placeBet,
+    claimWinningsById,
+    getActiveBets,
+    getActiveBetCount,
+    
+    // Legacy compatibility
     claimWinnings,
     getActiveBet,
     hasActiveBet,
     getBalance,
     refreshBalance,
-    // New pool-specific functions
     getPoolStatus,
     previewPayout,
-    canClaimPayout,
+    
     // System info
     isPoolEnabled,
     isLoading,

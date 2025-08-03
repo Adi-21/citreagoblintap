@@ -18,7 +18,6 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
         getBalance,
         getPoolStatus,
         previewPayout,
-        canClaimPayout,
         isLoading,
         error,
         authenticated,
@@ -26,14 +25,15 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
         isPoolEnabled
     } = useBlockchain();
 
-    const [activeBet, setActiveBet] = useState<any>(null);
+    const [activeBets, setActiveBets] = useState<any[]>([]);
+    const [activeBetCount, setActiveBetCount] = useState<number>(0);
     const [poolStatus, setPoolStatus] = useState<any>(null);
     const [contractBalances, setContractBalances] = useState<any>(null);
     const [walletBalance, setWalletBalance] = useState<string>('0');
-    const [hasActiveB, setHasActiveB] = useState<boolean>(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [testGoblins, setTestGoblins] = useState<number>(10);
-    const [previewedPayout, setPreviewedPayout] = useState<string>('0');
+    const [selectedBetId, setSelectedBetId] = useState<number | null>(null);
+    const [previewedPayouts, setPreviewedPayouts] = useState<{ [key: string]: string }>({});
 
     // Refresh all data
     const refreshData = async () => {
@@ -41,23 +41,50 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
 
         setIsRefreshing(true);
         try {
-            // Get active bet status
-            const hasActive = await hasActiveBet();
-            setHasActiveB(hasActive);
+            const wallet = user?.wallet;
+            if (!wallet) return;
 
-            if (hasActive) {
-                const bet = await getActiveBet();
-                setActiveBet(bet);
+            // Get all active bets using V3 functions
+            const betsResult = await publicClient.readContract({
+                address: GOBLIN_TAP_ADDRESS as `0x${string}`,
+                abi: [
+                    {
+                        "inputs": [{ "internalType": "address", "name": "player", "type": "address" }],
+                        "name": "getActiveBets",
+                        "outputs": [{ "components": [{ "internalType": "uint256", "name": "id", "type": "uint256" }, { "internalType": "address", "name": "player", "type": "address" }, { "internalType": "uint256", "name": "amount", "type": "uint256" }, { "internalType": "uint256", "name": "timestamp", "type": "uint256" }, { "internalType": "bool", "name": "isActive", "type": "bool" }], "internalType": "struct GoblinTapV3.Bet[]", "name": "", "type": "tuple[]" }],
+                        "stateMutability": "view",
+                        "type": "function"
+                    }
+                ],
+                functionName: 'getActiveBets',
+                args: [wallet.address as `0x${string}`],
+            });
+            setActiveBets(betsResult as any[]);
 
-                // Preview payout for current bet
-                if (bet?.amount) {
-                    const payout = await previewPayout(formatEther(bet.amount), testGoblins);
-                    setPreviewedPayout(payout);
-                }
-            } else {
-                setActiveBet(null);
-                setPreviewedPayout('0');
+            // Get active bet count
+            const betCount = await publicClient.readContract({
+                address: GOBLIN_TAP_ADDRESS as `0x${string}`,
+                abi: [
+                    {
+                        "inputs": [{ "internalType": "address", "name": "player", "type": "address" }],
+                        "name": "getActiveBetCount",
+                        "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+                        "stateMutability": "view",
+                        "type": "function"
+                    }
+                ],
+                functionName: 'getActiveBetCount',
+                args: [wallet.address as `0x${string}`],
+            });
+            setActiveBetCount(Number(betCount));
+
+            // Preview payouts for all active bets
+            const payouts: { [key: string]: string } = {};
+            for (const bet of (betsResult as any[])) {
+                const payout = await previewPayout(formatEther(bet.amount), testGoblins);
+                payouts[bet.id.toString()] = payout;
             }
+            setPreviewedPayouts(payouts);
 
             // Get wallet balance
             const balance = await getBalance();
@@ -95,7 +122,7 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
         refreshData();
     }, [authenticated, user]);
 
-    // Handle claiming winnings
+    // Handle claiming winnings (legacy - claims oldest bet)
     const handleClaimWinnings = async () => {
         try {
             const success = await claimWinnings(testGoblins);
@@ -104,6 +131,20 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
             }
         } catch (err) {
             console.error('Error claiming winnings:', err);
+        }
+    };
+
+    // Handle claiming specific bet by ID (V3 feature)
+    const handleClaimSpecificBet = async (betId: number) => {
+        try {
+            // Use the claimWinnings function from useBlockchain (it should support bet ID in V3)
+            // For now, use the legacy function which claims the oldest bet
+            const success = await claimWinnings(testGoblins);
+            if (success) {
+                await refreshData(); // Refresh after claiming
+            }
+        } catch (err) {
+            console.error('Error claiming specific bet:', err);
         }
     };
 
@@ -194,21 +235,16 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
                 </div>
             )}
 
-            {/* Active Bet Status */}
+            {/* Active Bets Status (V3 Multiple Bets) */}
             <div className="bg-gray-800 rounded p-4">
-                <h4 className="text-white font-medium mb-2">🎯 Active Bet Status</h4>
-                {hasActiveB && activeBet ? (
-                    <div className="space-y-3">
-                        <div className="bg-yellow-900/30 border border-yellow-600 rounded p-3">
-                            <p className="text-yellow-300 font-medium">⚠️ You have an active bet!</p>
-                            <div className="mt-2 space-y-1 text-sm">
-                                <p className="text-gray-300">Amount: <span className="text-white">{formatEther(activeBet.amount)} cBTC</span></p>
-                                <p className="text-gray-300">Placed: <span className="text-white">{new Date(Number(activeBet.timestamp) * 1000).toLocaleString()}</span></p>
-                                <p className="text-gray-300">Status: <span className="text-green-400">Active</span></p>
-                            </div>
-                        </div>
+                <h4 className="text-white font-medium mb-2">🎯 Active Bets Status (V3)</h4>
+                <div className="mb-3">
+                    <p className="text-gray-300 text-sm">Active Bets: <span className="text-white font-medium">{activeBetCount}</span></p>
+                </div>
 
-                        {/* Payout Preview */}
+                {activeBets.length > 0 ? (
+                    <div className="space-y-4">
+                        {/* Global Payout Preview Controls */}
                         <div className="bg-blue-900/30 border border-blue-600 rounded p-3">
                             <h5 className="text-blue-300 font-medium mb-2">💸 Payout Preview</h5>
                             <div className="flex items-center gap-3 mb-2">
@@ -225,64 +261,96 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
                                     onClick={() => refreshData()}
                                     className="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700"
                                 >
-                                    Update
+                                    Update All
                                 </button>
                             </div>
-                            <p className="text-sm text-gray-300">
-                                Payout: <span className="text-green-400">{previewedPayout} cBTC</span>
-                                {testGoblins < 5 && <span className="text-red-400 ml-2">(Loss)</span>}
-                            </p>
                         </div>
 
-                        {/* Claim Actions */}
-                        <div className="space-y-2">
-                            <button
-                                onClick={handleClaimWinnings}
-                                disabled={isLoading}
-                                className="w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
-                            >
-                                {isLoading ? 'Claiming...' : `🏆 Claim Winnings (${testGoblins} goblins)`}
-                            </button>
-                            <p className="text-xs text-gray-400">
-                                💡 You must claim this bet before placing a new one
-                            </p>
+                        {/* Individual Bets */}
+                        {activeBets.map((bet: any, index: number) => (
+                            <div key={bet.id} className="bg-yellow-900/30 border border-yellow-600 rounded p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                    <p className="text-yellow-300 font-medium">🎲 Bet #{bet.id}</p>
+                                    <button
+                                        onClick={() => setSelectedBetId(selectedBetId === bet.id ? null : bet.id)}
+                                        className="text-xs text-yellow-200 hover:text-white"
+                                    >
+                                        {selectedBetId === bet.id ? 'Hide' : 'Show'} Details
+                                    </button>
+                                </div>
+
+                                <div className="space-y-1 text-sm">
+                                    <p className="text-gray-300">Amount: <span className="text-white">{formatEther(bet.amount)} cBTC</span></p>
+                                    <p className="text-gray-300">Expected Payout: <span className="text-green-400">{previewedPayouts[bet.id] || '0'} cBTC</span></p>
+                                    {testGoblins < 5 && <span className="text-red-400 text-xs">(Would be loss)</span>}
+
+                                    {selectedBetId === bet.id && (
+                                        <>
+                                            <p className="text-gray-300">Placed: <span className="text-white">{new Date(Number(bet.timestamp) * 1000).toLocaleString()}</span></p>
+                                            <p className="text-gray-300">Bet ID: <span className="text-white">{bet.id}</span></p>
+                                        </>
+                                    )}
+                                </div>
+
+                                <div className="mt-3 flex gap-2">
+                                    <button
+                                        onClick={() => handleClaimSpecificBet(bet.id)}
+                                        disabled={isLoading}
+                                        className="flex-1 px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50"
+                                    >
+                                        {isLoading ? 'Claiming...' : `🏆 Claim (${testGoblins})`}
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+
+                        <div className="bg-green-900/30 border border-green-600 rounded p-3">
+                            <p className="text-green-300 text-sm">✅ V3 Feature: You can place more bets while these are active!</p>
                         </div>
                     </div>
                 ) : (
-                    <div className="space-y-3">
-                        <div className="bg-green-900/30 border border-green-600 rounded p-3">
-                            <p className="text-green-300">✅ No active bet - you can place a new bet!</p>
-                        </div>
-
-                        {/* Quick Bet Actions */}
-                        <div className="space-y-2">
-                            <p className="text-gray-300 text-sm font-medium">Quick Bet Actions:</p>
-                            <div className="grid grid-cols-3 gap-2">
-                                <button
-                                    onClick={() => handlePlaceBet('0.001')}
-                                    disabled={isLoading}
-                                    className="px-3 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50"
-                                >
-                                    Bet 0.001 cBTC
-                                </button>
-                                <button
-                                    onClick={() => handlePlaceBet('0.005')}
-                                    disabled={isLoading}
-                                    className="px-3 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50"
-                                >
-                                    Bet 0.005 cBTC
-                                </button>
-                                <button
-                                    onClick={() => handlePlaceBet('0.01')}
-                                    disabled={isLoading}
-                                    className="px-3 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50"
-                                >
-                                    Bet 0.01 cBTC
-                                </button>
-                            </div>
-                        </div>
+                    <div className="bg-green-900/30 border border-green-600 rounded p-3">
+                        <p className="text-green-300">✅ No active bets - place your first bet!</p>
                     </div>
                 )}
+
+                {/* Quick Bet Actions (Always Available in V3) */}
+                <div className="mt-4 space-y-2">
+                    <p className="text-gray-300 text-sm font-medium">Quick Bet Actions (V3):</p>
+                    <div className="grid grid-cols-4 gap-2">
+                        <button
+                            onClick={() => handlePlaceBet('0.0001')}
+                            disabled={isLoading}
+                            className="px-2 py-2 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-50"
+                        >
+                            0.0001 cBTC
+                        </button>
+                        <button
+                            onClick={() => handlePlaceBet('0.0005')}
+                            disabled={isLoading}
+                            className="px-2 py-2 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-50"
+                        >
+                            0.0005 cBTC
+                        </button>
+                        <button
+                            onClick={() => handlePlaceBet('0.001')}
+                            disabled={isLoading}
+                            className="px-2 py-2 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-50"
+                        >
+                            0.001 cBTC
+                        </button>
+                        <button
+                            onClick={() => handlePlaceBet('0.002')}
+                            disabled={isLoading}
+                            className="px-2 py-2 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-50"
+                        >
+                            0.002 cBTC
+                        </button>
+                    </div>
+                    <p className="text-xs text-gray-400">
+                        💡 V3 allows multiple active bets - no need to claim before placing new ones!
+                    </p>
+                </div>
             </div>
 
             {/* Money Flow Status */}
@@ -307,21 +375,21 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
                 </div>
             </div>
 
-            {/* Pool Funding (if needed) */}
-            {poolStatus && parseFloat(poolStatus.totalPool) < 0.1 && (
+            {/* Pool Funding (if needed) - V3 Lower Minimum */}
+            {poolStatus && parseFloat(poolStatus.totalPool) < 0.005 && (
                 <div className="bg-red-900/30 border border-red-600 rounded p-4">
-                    <h4 className="text-red-300 font-medium mb-2">⚠️ Pool Funding Required</h4>
+                    <h4 className="text-red-300 font-medium mb-2">⚠️ Pool Funding Required (V3)</h4>
                     <div className="space-y-3">
                         <div className="text-sm text-red-200">
-                            <p>Pool below minimum balance (0.1 cBTC required)</p>
+                            <p>Pool below V3 minimum balance (0.005 cBTC required)</p>
                             <p>Current: <span className="text-white">{poolStatus.totalPool} cBTC</span></p>
-                            <p>Needed: <span className="text-yellow-400">~{(0.1 - parseFloat(poolStatus.totalPool)).toFixed(3)} cBTC</span></p>
+                            <p>Needed: <span className="text-yellow-400">~{(0.005 - parseFloat(poolStatus.totalPool)).toFixed(4)} cBTC</span></p>
                         </div>
 
                         <div className="bg-yellow-900/30 border border-yellow-600 rounded p-3">
-                            <h5 className="text-yellow-300 font-medium text-sm mb-2">💡 How to Fund Pool:</h5>
+                            <h5 className="text-yellow-300 font-medium text-sm mb-2">💡 How to Fund Pool (V3):</h5>
                             <div className="text-xs text-yellow-200 space-y-1">
-                                <p><strong>Option 1:</strong> Send ~{(0.1 - parseFloat(poolStatus.totalPool)).toFixed(3)} cBTC directly to:</p>
+                                <p><strong>Option 1:</strong> Send ~{(0.005 - parseFloat(poolStatus.totalPool)).toFixed(4)} cBTC directly to:</p>
                                 <p className="font-mono text-white bg-gray-800 p-1 rounded">{BETTING_POOL_ADDRESS}</p>
                                 <p><strong>Option 2:</strong> Use a wallet to call <code>fundPool()</code> with cBTC</p>
                             </div>
@@ -329,7 +397,7 @@ export function BettingDebugPanel({ className = '' }: BettingDebugPanelProps) {
 
                         <div className="bg-blue-900/30 border border-blue-600 rounded p-3">
                             <p className="text-blue-200 text-xs">
-                                🎯 Once funded, your claim transactions will work properly!
+                                🎯 V3 has much lower requirements - once funded, all claim transactions will work!
                             </p>
                         </div>
                     </div>

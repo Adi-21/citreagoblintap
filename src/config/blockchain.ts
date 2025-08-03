@@ -48,7 +48,17 @@ export const GOBLIN_TAP_ABI = [
   },
   {
     "inputs": [],
+    "name": "BetNotActive",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "InsufficientPoolBalance",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidBetId",
     "type": "error"
   },
   {
@@ -58,7 +68,7 @@ export const GOBLIN_TAP_ABI = [
   },
   {
     "inputs": [],
-    "name": "NoActiveBet",
+    "name": "NotBetOwner",
     "type": "error"
   },
   {
@@ -81,6 +91,12 @@ export const GOBLIN_TAP_ABI = [
         "type": "address"
       },
       {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "betId",
+        "type": "uint256"
+      },
+      {
         "indexed": false,
         "internalType": "uint256",
         "name": "amount",
@@ -98,6 +114,12 @@ export const GOBLIN_TAP_ABI = [
         "internalType": "address",
         "name": "player",
         "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "betId",
+        "type": "uint256"
       },
       {
         "indexed": false,
@@ -119,6 +141,12 @@ export const GOBLIN_TAP_ABI = [
         "type": "address"
       },
       {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "betId",
+        "type": "uint256"
+      },
+      {
         "indexed": false,
         "internalType": "uint256",
         "name": "payout",
@@ -137,13 +165,18 @@ export const GOBLIN_TAP_ABI = [
   {
     "inputs": [
       {
-        "internalType": "address",
+        "internalType": "uint256",
         "name": "",
-        "type": "address"
+        "type": "uint256"
       }
     ],
-    "name": "activeBets",
+    "name": "bets",
     "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
       {
         "internalType": "address",
         "name": "player",
@@ -173,7 +206,7 @@ export const GOBLIN_TAP_ABI = [
     "name": "bettingPool",
     "outputs": [
       {
-        "internalType": "contract IBettingPool",
+        "internalType": "contract IBettingPoolV3",
         "name": "",
         "type": "address"
       }
@@ -219,6 +252,24 @@ export const GOBLIN_TAP_ABI = [
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "betId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint8",
+        "name": "goblinsTapped",
+        "type": "uint8"
+      }
+    ],
+    "name": "claimWinnings",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "emergencyWithdraw",
     "outputs": [],
@@ -237,6 +288,11 @@ export const GOBLIN_TAP_ABI = [
     "outputs": [
       {
         "components": [
+          {
+            "internalType": "uint256",
+            "name": "id",
+            "type": "uint256"
+          },
           {
             "internalType": "address",
             "name": "player",
@@ -258,7 +314,118 @@ export const GOBLIN_TAP_ABI = [
             "type": "bool"
           }
         ],
-        "internalType": "struct GoblinTapV2.Bet",
+        "internalType": "struct GoblinTapV3.Bet",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "player",
+        "type": "address"
+      }
+    ],
+    "name": "getActiveBetCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "player",
+        "type": "address"
+      }
+    ],
+    "name": "getActiveBets",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "id",
+            "type": "uint256"
+          },
+          {
+            "internalType": "address",
+            "name": "player",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "timestamp",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bool",
+            "name": "isActive",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct GoblinTapV3.Bet[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "betId",
+        "type": "uint256"
+      }
+    ],
+    "name": "getBet",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "id",
+            "type": "uint256"
+          },
+          {
+            "internalType": "address",
+            "name": "player",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "timestamp",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bool",
+            "name": "isActive",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct GoblinTapV3.Bet",
         "name": "",
         "type": "tuple"
       }
@@ -287,6 +454,19 @@ export const GOBLIN_TAP_ABI = [
   },
   {
     "inputs": [],
+    "name": "nextBetId",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "owner",
     "outputs": [
       {
@@ -301,8 +481,38 @@ export const GOBLIN_TAP_ABI = [
   {
     "inputs": [],
     "name": "placeBet",
-    "outputs": [],
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
     "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "playerBetIds",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
