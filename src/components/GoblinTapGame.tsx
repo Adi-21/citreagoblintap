@@ -6,10 +6,36 @@ import { PAYOUT_MULTIPLIERS } from '@/config/blockchain';
 
 // --- GAME CONFIGURATION ---
 const GAME_DURATION = 15; // seconds
-const GOBLIN_POP_UP_SPEED = 800; // ms between new goblins
-const GOBLIN_STAY_UP_TIME = 1500; // ms a goblin stays visible
-const TARGET_SCORE = 10;
+const GOBLIN_POP_UP_SPEED = 800; // ms between new goblins (slower for better gameplay)
+const GOBLIN_STAY_UP_TIME_MIN = 1200; // ms a goblin stays visible (minimum - longer for hitting)
+const GOBLIN_STAY_UP_TIME_MAX = 1800; // ms a goblin stays visible (maximum)
 const GRID_SIZE = 9; // 3x3 grid
+const MAX_CONCURRENT_GOBLINS = 2; // Reduced for better targeting
+
+// Goblin types for variety - BALANCED for hammer gameplay
+const GOBLIN_TYPES = {
+  NORMAL: { 
+    color: 'bg-green-500', 
+    border: 'border-green-700', 
+    points: 1, 
+    speed: 1,
+    stayTime: 1500 
+  },
+  FAST: { 
+    color: 'bg-yellow-500', 
+    border: 'border-yellow-700', 
+    points: 2, 
+    speed: 1.2,
+    stayTime: 1200  // Increased from 700ms to 1200ms for hammer to work!
+  },
+  BONUS: { 
+    color: 'bg-purple-500', 
+    border: 'border-purple-700', 
+    points: 3, 
+    speed: 0.8,
+    stayTime: 1800 
+  }
+} as const;
 
 // --- HELPER HOOK for managing intervals ---
 const useInterval = (callback: () => void, delay: number | null) => {
@@ -34,11 +60,17 @@ const useInterval = (callback: () => void, delay: number | null) => {
 
 // --- UI COMPONENTS ---
 
-// New SVG Goblin Component for better visuals and states
-const Goblin = ({ isHit }: { isHit: boolean }) => (
-  <div className="relative w-24 h-24 select-none">
-    {/* Goblin Body */}
-    <div className={`absolute inset-0 bg-green-500 rounded-full border-4 border-green-700 transition-transform duration-100 ${isHit ? 'scale-90' : ''}`}></div>
+// Enhanced Goblin Component with types and hammer cursor
+const Goblin = ({ isHit, goblinType = 'NORMAL' }: { isHit: boolean; goblinType?: keyof typeof GOBLIN_TYPES }) => {
+  const type = GOBLIN_TYPES[goblinType];
+  return (
+    <div className="relative w-24 h-24 select-none cursor-none">
+      {/* Goblin Body with type-based styling */}
+      <div className={`absolute inset-0 ${type.color} rounded-full border-4 ${type.border} transition-transform duration-100 ${isHit ? 'scale-90' : ''}`}>
+        {/* Type indicator */}
+        {goblinType === 'FAST' && <div className="absolute top-1 right-1 text-xs">⚡</div>}
+        {goblinType === 'BONUS' && <div className="absolute top-1 right-1 text-xs">💎</div>}
+      </div>
     {/* Eyes */}
     <div className="absolute top-6 left-5 w-14 h-8 flex justify-between">
       <div className="w-6 h-8 bg-white rounded-full flex items-center justify-center">
@@ -57,8 +89,9 @@ const Goblin = ({ isHit }: { isHit: boolean }) => (
     )}
     {/* Mouth */}
     <div className={`absolute bottom-5 left-1/2 -translate-x-1/2 w-10 h-5 bg-green-800 rounded-b-full border-2 border-green-900 ${isHit ? 'h-2' : ''}`}></div>
-  </div>
-);
+    </div>
+  );
+};
 
 // New SVG Dirt Mound for better visuals
 const DirtMound = () => (
@@ -269,42 +302,64 @@ const ResultsModal = ({ isOpen, onClose, goblinsTapped, betAmount, onPlayAgain }
     if (isOpen && !hasClaimed) {
       setHasClaimed(true);
       
-      // Get preview payout first
-      if (previewPayout) {
-        previewPayout(betAmount, goblinsTapped).then(setActualPayout);
-      }
+      // Calculate if player won or lost FIRST
+      const betAmountNum = parseFloat(betAmount);
+      let multiplier = 0;
+      if (goblinsTapped >= 10) multiplier = PAYOUT_MULTIPLIERS[10];
+      else if (goblinsTapped >= 8) multiplier = PAYOUT_MULTIPLIERS[8];
+      else if (goblinsTapped >= 5) multiplier = PAYOUT_MULTIPLIERS[5];
+      else multiplier = PAYOUT_MULTIPLIERS[0];
       
-      claimWinnings(goblinsTapped).then(async (success) => {
-        if (success) {
-          console.log('✅ Winnings claimed successfully');
-          
-          // Use actual payout if available, otherwise calculate locally
-          if (actualPayout !== '0') {
-            setWinnings(parseFloat(actualPayout));
-          } else {
-            // Fallback calculation
-            const betAmountNum = parseFloat(betAmount);
-            let multiplier = 0;
-            if (goblinsTapped >= 10) multiplier = PAYOUT_MULTIPLIERS[10];
-            else if (goblinsTapped >= 8) multiplier = PAYOUT_MULTIPLIERS[8];
-            else if (goblinsTapped >= 5) multiplier = PAYOUT_MULTIPLIERS[5];
-            else multiplier = PAYOUT_MULTIPLIERS[0];
-            setWinnings(betAmountNum * multiplier);
-          }
-          
-          // Refresh balance after claiming
-          try {
-            await refreshBalance();
-            console.log('💳 Balance refreshed after claiming winnings');
-          } catch (err) {
-            console.error('Failed to refresh balance:', err);
-          }
-          
-        } else {
-          console.log('❌ Winnings claim failed');
-          setWinnings(0); // Claim failed
+      const calculatedWinnings = betAmountNum * multiplier;
+      const didWin = calculatedWinnings > 0;
+      
+      console.log(`🎯 Game Result: ${goblinsTapped} goblins, multiplier: ${multiplier}x, winnings: ${calculatedWinnings} cBTC, didWin: ${didWin}`);
+      
+      if (didWin) {
+        // ✅ ONLY claim winnings if player actually won!
+        console.log('🎉 Player won! Claiming winnings...');
+        
+        // Get preview payout first
+        if (previewPayout) {
+          previewPayout(betAmount, goblinsTapped).then(setActualPayout);
         }
-      });
+        
+        claimWinnings(goblinsTapped).then(async (success) => {
+          if (success) {
+            console.log('✅ Winnings claimed successfully');
+            
+            // Use actual payout if available, otherwise use calculated
+            if (actualPayout !== '0') {
+              setWinnings(parseFloat(actualPayout));
+            } else {
+              setWinnings(calculatedWinnings);
+            }
+            
+            // Refresh balance after claiming
+            try {
+              await refreshBalance();
+              console.log('💳 Balance refreshed after claiming winnings');
+            } catch (err) {
+              console.error('Failed to refresh balance:', err);
+            }
+            
+          } else {
+            console.log('❌ Winnings claim failed');
+            setWinnings(0); // Claim failed
+          }
+        });
+      } else {
+        // ❌ Player lost - NO transaction should happen!
+        console.log('😅 Player lost! No winnings to claim.');
+        setWinnings(0);
+        
+        // Still refresh balance to show the loss
+        refreshBalance().then(() => {
+          console.log('💳 Balance refreshed after loss');
+        }).catch((err) => {
+          console.error('Failed to refresh balance:', err);
+        });
+      }
     } else if (!isOpen) {
       setWinnings(null);
       setHasClaimed(false);
@@ -371,7 +426,7 @@ const ResultsModal = ({ isOpen, onClose, goblinsTapped, betAmount, onPlayAgain }
 export default function GoblinTapGame() {
   
   // --- STATE MANAGEMENT ---
-  const [holes, setHoles] = useState(Array(GRID_SIZE).fill({ isUp: false, isHit: false }));
+  const [holes, setHoles] = useState(Array(GRID_SIZE).fill({ isUp: false, isHit: false, goblinType: 'NORMAL' }));
   const [score, setScore] = useState(0);
   const [timeLeft, setTimeLeft] = useState(GAME_DURATION);
   const [isGameActive, setIsGameActive] = useState(false);
@@ -379,16 +434,52 @@ export default function GoblinTapGame() {
   const [showBettingModal, setShowBettingModal] = useState(false);
   const [showResultsModal, setShowResultsModal] = useState(false);
   const [lastGameResult, setLastGameResult] = useState({ goblins: 0, bet: '0', betId: null as number | null });
+  const [hammerPosition, setHammerPosition] = useState({ x: 0, y: 0 });
+  const [isHammering, setIsHammering] = useState(false);
+  const [hammerRotation, setHammerRotation] = useState(0);
+  const [hammerScale, setHammerScale] = useState(1);
+  const [hitPosition, setHitPosition] = useState<{ x: number; y: number; active: boolean } | null>(null);
 
   // --- GAME LOGIC ---
 
-  const handleGoblinTap = (index: number) => {
+  const handleGoblinTap = (index: number, event: React.MouseEvent) => {
     if (!isGameActive || !holes[index].isUp || holes[index].isHit) return;
 
-    setScore(prev => prev + 1);
+    // Get points based on goblin type
+    const goblinType = holes[index].goblinType as keyof typeof GOBLIN_TYPES;
+    const points = GOBLIN_TYPES[goblinType].points;
+    
+    setScore(prev => prev + points);
+    
+    // 🎯 3D HAMMER ANIMATION - Realistic hitting effect!
+    const rect = event.currentTarget.getBoundingClientRect();
+    const hitX = rect.left + rect.width / 2;
+    const hitY = rect.top + rect.height / 2;
+    
+    // Set hammer to hit position with dramatic animation
+    setHammerPosition({ x: hitX, y: hitY });
+    setHammerRotation(-45); // Hammer tilts down for hitting
+    setHammerScale(1.3); // Hammer grows bigger for impact
+    setIsHammering(true);
+    
+    // Show hit effect at goblin position
+    setHitPosition({ x: hitX, y: hitY, active: true });
+    
+    // Reset hammer after hit
+    setTimeout(() => {
+      setIsHammering(false);
+      setHammerRotation(0);
+      setHammerScale(1);
+    }, 150);
+    
+    // Hide hit effect
+    setTimeout(() => {
+      setHitPosition(null);
+    }, 300);
+
     setHoles(prev => {
       const newHoles = [...prev];
-      newHoles[index] = { isUp: true, isHit: true };
+      newHoles[index] = { ...newHoles[index], isUp: true, isHit: true };
       return newHoles;
     });
 
@@ -396,7 +487,7 @@ export default function GoblinTapGame() {
     setTimeout(() => {
         setHoles(prev => {
             const newHoles = [...prev];
-            newHoles[index] = { isUp: false, isHit: false };
+            newHoles[index] = { isUp: false, isHit: false, goblinType: 'NORMAL' };
             return newHoles;
         });
     }, 300);
@@ -409,11 +500,8 @@ export default function GoblinTapGame() {
     setShowResultsModal(true);
   }, [score]);
 
-  useEffect(() => {
-    if (score >= TARGET_SCORE && isGameActive) {
-      endGame('win');
-    }
-  }, [score, isGameActive, endGame]);
+  // ✅ REMOVED AUTO-WIN: Game now only ends when timer reaches 0
+  // This fixes the bug where game ended immediately at 10 points
 
   useInterval(() => {
     setTimeLeft(prev => prev - 1);
@@ -427,16 +515,28 @@ export default function GoblinTapGame() {
 
   useInterval(() => {
     const availableHoles = holes.map((h, i) => !h.isUp ? i : -1).filter(i => i !== -1);
-    if (availableHoles.length === 0) return;
+    const activeGoblins = holes.filter(h => h.isUp).length;
+    
+    // Limit concurrent goblins and ensure some holes available
+    if (availableHoles.length === 0 || activeGoblins >= MAX_CONCURRENT_GOBLINS) return;
 
     const randomIndex = availableHoles[Math.floor(Math.random() * availableHoles.length)];
+    
+    // Randomly select goblin type based on probability
+    const rand = Math.random();
+    let goblinType: keyof typeof GOBLIN_TYPES;
+    if (rand < 0.1) goblinType = 'BONUS';      // 10% chance for bonus (3 points)
+    else if (rand < 0.3) goblinType = 'FAST';  // 20% chance for fast (2 points)  
+    else goblinType = 'NORMAL';                // 70% chance for normal (1 point)
 
     setHoles(prev => {
       const newHoles = [...prev];
-      newHoles[randomIndex] = { isUp: true, isHit: false };
+      newHoles[randomIndex] = { isUp: true, isHit: false, goblinType };
       return newHoles;
     });
 
+    // Dynamic goblin disappear timing for variety
+    const disappearTime = GOBLIN_STAY_UP_TIME_MIN + Math.random() * (GOBLIN_STAY_UP_TIME_MAX - GOBLIN_STAY_UP_TIME_MIN);
     setTimeout(() => {
       setHoles(prev => {
         const newHoles = [...prev];
@@ -445,16 +545,20 @@ export default function GoblinTapGame() {
         }
         return newHoles;
       });
-    }, GOBLIN_STAY_UP_TIME);
+    }, disappearTime);
 
   }, isGameActive ? GOBLIN_POP_UP_SPEED : null);
 
   const startGame = () => {
     setScore(0);
     setTimeLeft(GAME_DURATION);
-    setHoles(Array(GRID_SIZE).fill({ isUp: false, isHit: false }));
+    setHoles(Array(GRID_SIZE).fill({ isUp: false, isHit: false, goblinType: 'NORMAL' }));
     setGameResult(null);
     setIsGameActive(true);
+    setIsHammering(false);
+    setHammerRotation(0);
+    setHammerScale(1);
+    setHitPosition(null);
   };
 
   const handleBetPlaced = (betAmount: string, betId?: number) => {
@@ -466,6 +570,14 @@ export default function GoblinTapGame() {
   const handlePlayAgain = () => {
     setShowResultsModal(false);
     setShowBettingModal(true);
+  };
+
+  // Track mouse movement for hammer cursor - SMOOTH and RESPONSIVE!
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isGameActive && !isHammering) {
+      // Smooth hammer following with slight lag for natural feel
+      setHammerPosition({ x: e.clientX, y: e.clientY });
+    }
   };
 
   return (
@@ -486,7 +598,7 @@ export default function GoblinTapGame() {
             </div>
             <div className="text-center">
               <h1 className="text-3xl sm:text-4xl text-black drop-shadow-lg font-bold">GOBLIN TAP</h1>
-              <p className="text-xs sm:text-sm text-black">Tap {TARGET_SCORE} goblins to win!</p>
+              <p className="text-xs sm:text-sm text-black">Tap as many goblins as you can in 15 seconds!</p>
             </div>
             <div className="text-center">
               <div className="text-4xl text-black tracking-wider font-bold">{timeLeft}</div>
@@ -494,17 +606,78 @@ export default function GoblinTapGame() {
             </div>
           </div>
 
-          {/* Game Grid */}
-          <div className="relative grid grid-cols-3 gap-2 sm:gap-4 bg-gradient-to-b from-green-100 to-green-200 rounded-lg p-4" style={{ height: '450px' }}>
-            {holes.map((hole, index) => (
-              <div key={index} className="relative w-full h-full flex items-center justify-center" onClick={() => handleGoblinTap(index)}>
-                <DirtMound />
-                <div 
-                  className={`absolute bottom-12 transition-all duration-300 cursor-pointer ${hole.isUp ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'}`}
-                  style={{ transitionTimingFunction: 'cubic-bezier(0.34, 1.56, 0.64, 1)' }}
-                >
-                  <Goblin isHit={hole.isHit} />
+          {/* Game Grid with Hammer Cursor */}
+          <div 
+            className="relative grid grid-cols-3 gap-2 sm:gap-4 bg-gradient-to-b from-green-100 to-green-200 rounded-lg p-4" 
+            style={{ 
+              height: '450px',
+              cursor: isGameActive ? 'none' : 'default'
+            }}
+            onMouseMove={handleMouseMove}
+          >
+            {/* 🎯 3D REALISTIC HAMMER CURSOR */}
+            {isGameActive && (
+              <div 
+                className="fixed pointer-events-none z-50"
+                style={{ 
+                  left: hammerPosition.x, 
+                  top: hammerPosition.y,
+                  transform: `translate(-50%, -50%) rotate(${hammerRotation}deg) scale(${hammerScale})`,
+                  transition: isHammering ? 'none' : 'transform 0.1s ease-out'
+                }}
+              >
+                {/* 3D Hammer with shadow and depth */}
+                <div className="relative">
+                  {/* Hammer shadow */}
+                  <div 
+                    className="absolute text-4xl opacity-30"
+                    style={{ 
+                      transform: 'translate(2px, 2px)',
+                      filter: 'blur(1px)'
+                    }}
+                  >
+                    🔨
+                  </div>
+                  {/* Main hammer */}
+                  <div className="text-4xl filter drop-shadow-lg">
+                    🔨
+                  </div>
+                  {/* Hammer highlight for 3D effect */}
+                  <div 
+                    className="absolute text-4xl opacity-20"
+                    style={{ 
+                      transform: 'translate(-1px, -1px)',
+                      filter: 'brightness(1.5)'
+                    }}
+                  >
+                    🔨
+                  </div>
                 </div>
+              </div>
+            )}
+
+            {/* 💥 HIT EFFECT - Visual feedback when hammer hits */}
+            {hitPosition && hitPosition.active && (
+              <div 
+                className="fixed pointer-events-none z-40 animate-ping"
+                style={{ 
+                  left: hitPosition.x, 
+                  top: hitPosition.y,
+                  transform: 'translate(-50%, -50%)'
+                }}
+              >
+                <div className="text-6xl filter drop-shadow-lg">💥</div>
+              </div>
+            )}
+            {holes.map((hole, index) => (
+              <div key={index} className="relative w-full h-full flex items-center justify-center" onClick={(e) => handleGoblinTap(index, e)}>
+                <DirtMound />
+                                  <div 
+                    className={`absolute bottom-12 transition-all duration-300 cursor-none ${hole.isUp ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'}`}
+                    style={{ transitionTimingFunction: 'cubic-bezier(0.34, 1.56, 0.64, 1)' }}
+                  >
+                    <Goblin isHit={hole.isHit} goblinType={hole.goblinType} />
+                  </div>
               </div>
             ))}
 
@@ -515,21 +688,44 @@ export default function GoblinTapGame() {
                   <>
                     <div className="text-8xl mb-4">🎉</div>
                     <h2 className="text-5xl text-green-600 mb-4 drop-shadow-lg font-bold">YOU WIN!</h2>
-                    <p className="text-xl mb-6 text-black font-semibold">You tapped {score} goblins!</p>
+                    <p className="text-xl mb-6 text-black font-semibold">
+                      Amazing! You scored {score} points!
+                      {score >= 15 && <span className="block text-green-600">🎉 Incredible performance!</span>}
+                      {score >= 10 && score < 15 && <span className="block text-blue-600">🔥 Great job!</span>}
+                      {score >= 5 && score < 10 && <span className="block text-purple-600">👍 Well done!</span>}
+                    </p>
                   </>
                 )}
                 {gameResult === 'loss' && (
                   <>
                     <div className="text-8xl mb-4">😅</div>
                     <h2 className="text-5xl text-red-600 mb-4 drop-shadow-lg font-bold">TIME&apos;S UP!</h2>
-                    <p className="text-xl mb-6 text-black font-semibold">You only tapped {score} goblins.</p>
+                    <p className="text-xl mb-6 text-black font-semibold">
+                      You scored {score} points! 
+                      {score >= 8 && <span className="block text-orange-600">So close to greatness! 🔥</span>}
+                      {score >= 4 && score < 8 && <span className="block text-blue-600">Good effort! Keep practicing! 💪</span>}
+                      {score < 4 && <span className="block text-purple-600">Every tap counts! Try again! 🎯</span>}
+                    </p>
                   </>
                 )}
                 {!gameResult && (
                   <>
                     <div className="text-8xl mb-4">🎯</div>
                     <h2 className="text-4xl text-purple-600 mb-4 drop-shadow-lg font-bold">Ready to Play?</h2>
-                    <p className="text-lg mb-6 text-black">Tap 10 goblins to win!</p>
+                    <p className="text-lg mb-4 text-black">Tap as many goblins as you can in 15 seconds!</p>
+                    <div className="text-sm text-black mb-4 space-y-1 bg-white bg-opacity-70 p-3 rounded">
+                      <div className="font-semibold mb-2">🎯 Goblin Types:</div>
+                      <div>🟢 Normal: 1 point</div>
+                      <div>🟡 Fast: 2 points ⚡ (faster but hittable!)</div>
+                      <div>🟣 Bonus: 3 points 💎 (rare but slow!)</div>
+                      <div className="mt-2 text-xs text-gray-600">
+                        <div>💡 <strong>Win Conditions:</strong></div>
+                        <div>• 5-7 goblins: 1.2x payout</div>
+                        <div>• 8-9 goblins: 1.5x payout</div>
+                        <div>• 10+ goblins: 2.0x payout</div>
+                        <div>• Less than 5: You lose your bet!</div>
+                      </div>
+                    </div>
                   </>
                 )}
                 <button
